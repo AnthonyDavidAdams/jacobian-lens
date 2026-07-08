@@ -198,6 +198,7 @@ def compute_slice(
     *,
     top_n: int = 10,
     max_tracked: int | None = None,
+    track_top1_only: bool = False,
     pinned_token_ids: set[int] | None = None,
     layer_stride: int = 1,
     last_n_tokens: int | None = None,
@@ -292,13 +293,20 @@ def compute_slice(
     # Choose tracked tokens: pinned + most-frequently-high-ranked in the top-N grid.
     flat_ids = top_ids.ravel()
     flat_ranks = top_ranks.ravel()
-    score_by_token: dict[int, float] = {}
-    for token_id, rank in zip(flat_ids, flat_ranks, strict=True):
-        score_by_token[int(token_id)] = score_by_token.get(int(token_id), 0.0) + 1.0 / (
-            int(rank) + 1
+    if track_top1_only:
+        # Only cell top-1 tokens are pinnable in click-to-pin UIs; tracking
+        # the full top-N set costs ~top_n times more rank files per slice.
+        tracked = sorted(
+            set(int(t) for t in top_ids[:, :, 0].ravel()) | pinned_token_ids
         )
-    by_score = sorted(score_by_token, key=score_by_token.__getitem__, reverse=True)
-    tracked = sorted(set(by_score[:max_tracked]) | pinned_token_ids)
+    else:
+        score_by_token: dict[int, float] = {}
+        for token_id, rank in zip(flat_ids, flat_ranks, strict=True):
+            score_by_token[int(token_id)] = score_by_token.get(
+                int(token_id), 0.0
+            ) + 1.0 / (int(rank) + 1)
+        by_score = sorted(score_by_token, key=score_by_token.__getitem__, reverse=True)
+        tracked = sorted(set(by_score[:max_tracked]) | pinned_token_ids)
 
     # Pass 2: re-unembed per layer and compute tracked-token ranks chunked
     # (no full-seq argsort; peak memory is one layer's logits + a chunk sort).
